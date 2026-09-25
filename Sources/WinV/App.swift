@@ -58,10 +58,14 @@ struct MenuContent: View {
 enum About {
     static func show() {
         NSApp.activate(ignoringOtherApps: true)
-        let credits = NSAttributedString(
-            string: "Clipboard history for your Mac.\nPress \(HotKey.main.label) anywhere to open it.",
+        let center = { let s = NSMutableParagraphStyle(); s.alignment = .center; return s }()
+        let credits = NSMutableAttributedString(
+            string: "Clipboard history for your Mac.\nPress \(HotKey.main.label) anywhere to open it.\n\n",
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor,
-                         .paragraphStyle: { let s = NSMutableParagraphStyle(); s.alignment = .center; return s }()])
+                         .paragraphStyle: center])
+        credits.append(NSAttributedString(string: "Support WinV ☕", attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .link: URL(string: "https://buymeacoffee.com/brightwave")!,
+            .paragraphStyle: center]))
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "WinV",
             .applicationIcon: NSApp.applicationIconImage ?? icon,

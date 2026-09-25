@@ -14,6 +14,7 @@ Press a shortcut anywhere, pick something you copied earlier, and it gets pasted
 [![Dependencies: none](https://img.shields.io/badge/dependencies-none-2ea44f)](Package.swift)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Brightwav3/winv?include_prereleases&label=release)](https://github.com/Brightwav3/winv/releases)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy_me_a_coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/brightwave)
 [![Stars](https://img.shields.io/github/stars/Brightwav3/winv?style=flat&logo=github)](https://github.com/Brightwav3/winv/stargazers)
 
 [Features](#features) · [Install](#install) · [Shortcuts](#keyboard-shortcuts) · [Build](#build-from-source) · [Privacy](#privacy)
@@ -96,6 +97,10 @@ Sources/WinV/
 ## Privacy
 
 WinV has no analytics or telemetry. Its only network request is the update check against the GitHub Releases API, which you can turn off in Settings. History stays on your Mac in a local JSON file. You can pause recording or clear the history at any time from the menu bar.
+
+## Support
+
+WinV is free and always will be. If it saves you time, you can [buy me a coffee ☕](https://buymeacoffee.com/brightwave).
 
 ## License
 
