@@ -21,6 +21,10 @@ Press a shortcut anywhere, pick something you copied earlier, and it gets pasted
 
 </div>
 
+<p align="center">
+  <img src="Design/Assets/Screenshot.webp" width="820" alt="WinV history panel and settings window with Liquid Glass UI">
+</p>
+
 ---
 
 ## Features
