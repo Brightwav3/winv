@@ -214,6 +214,46 @@ extension Updater: UNUserNotificationCenterDelegate {
 
 // MARK: - Install prompt
 
+/// Renders the GitHub release body: headings, bullets, quotes and inline markdown (bold, links, code).
+struct ReleaseNotes: View {
+    let markdown: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(markdown.components(separatedBy: .newlines).enumerated()), id: \.offset) { i, raw in
+                line(raw.trimmingCharacters(in: .whitespaces), first: i == 0)
+            }
+        }
+        .font(.system(size: 13)).foregroundStyle(Color.ink)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder private func line(_ l: String, first: Bool) -> some View {
+        if l.isEmpty {
+            Color.clear.frame(height: 2)
+        } else if l.hasPrefix("#") {
+            Text(inline(l.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)))
+                .font(.system(size: 13, weight: .semibold)).padding(.top, first ? 0 : 4)
+        } else if l.hasPrefix("- ") || l.hasPrefix("* ") {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("•").foregroundStyle(Color.ink3)
+                Text(inline(String(l.dropFirst(2))))
+            }
+        } else if l.hasPrefix(">") {
+            Text(inline(l.drop { $0 == ">" }.trimmingCharacters(in: .whitespaces)))
+                .foregroundStyle(Color.ink2).padding(.leading, 10)
+                .overlay(alignment: .leading) { Rectangle().fill(Color.line).frame(width: 2) }
+        } else {
+            Text(inline(l))
+        }
+    }
+
+    private func inline(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s)) ?? AttributedString(s)
+    }
+}
+
 @MainActor
 enum UpdateWindow {
     static func show() { Windows.show("update", title: "Software Update", UpdateView()) }
@@ -240,12 +280,7 @@ struct UpdateView: View {
             }
             if let r = updater.available, !r.notes.isEmpty {
                 ScrollView {
-                    Text((try? AttributedString(markdown: r.notes,
-                                                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-                         ?? AttributedString(r.notes))
-                        .font(.system(size: 13)).foregroundStyle(Color.ink)
-                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                        .padding(12)
+                    ReleaseNotes(markdown: r.notes).padding(14)
                 }
                 .frame(height: 180)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.card))

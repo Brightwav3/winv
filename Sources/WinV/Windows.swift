@@ -280,6 +280,11 @@ enum Windows {
             w.contentMaxSize = NSSize(width: size.width, height: 4000)
         }
         w.isReleasedWhenClosed = false
+        // Content sits below the (transparent) titlebar; grow by its height so nothing is clipped.
+        if key != "settings" {
+            let bar = w.frame.height - w.contentLayoutRect.height
+            if bar > 0 { w.setContentSize(NSSize(width: size.width, height: min(size.height + bar, maxH))) }
+        }
         w.center()
         w.makeKeyAndOrderFront(nil)
         open[key] = w
