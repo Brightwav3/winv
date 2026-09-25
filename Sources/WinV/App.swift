@@ -63,9 +63,14 @@ enum About {
             string: "Clipboard history for your Mac.\nPress \(HotKey.main.label) anywhere to open it.\n\n",
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor,
                          .paragraphStyle: center])
-        credits.append(NSAttributedString(string: "Support WinV ☕", attributes: [
-            .font: NSFont.systemFont(ofSize: 11), .link: URL(string: "https://buymeacoffee.com/brightwave")!,
-            .paragraphStyle: center]))
+        func link(_ title: String, _ url: String) -> NSAttributedString {
+            NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 11),
+                                                          .link: URL(string: url)!, .paragraphStyle: center])
+        }
+        credits.append(link("GitHub", "https://github.com/Brightwav3"))
+        credits.append(NSAttributedString(string: "  ·  ", attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor, .paragraphStyle: center]))
+        credits.append(link("Buy me a coffee ☕", "https://buymeacoffee.com/brightwave"))
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "WinV",
             .applicationIcon: NSApp.applicationIconImage ?? icon,
