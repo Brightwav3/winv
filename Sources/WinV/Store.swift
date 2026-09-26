@@ -254,5 +254,16 @@ enum Settings {
     static var historyOn: Bool { d.object(forKey: "historyOn") as? Bool ?? true }
     static var skipConcealed: Bool { d.object(forKey: "skipConcealed") as? Bool ?? true }
     static var plainDefault: Bool { d.bool(forKey: "plainDefault") }
+    static var minimal: Bool { d.bool(forKey: "minimal") }
+
+    /// History panel glass look, driven by the Appearance sliders.
+    struct Look { var on: Bool; var transparency, hue, saturation, blur: Double }
+    static var look: Look {
+        Look(on: d.object(forKey: "glassOn") as? Bool ?? true,
+             transparency: d.object(forKey: "glassTransparency") as? Double ?? 0.58,
+             hue: d.double(forKey: "glassHue"),
+             saturation: d.double(forKey: "glassSaturation"),
+             blur: d.double(forKey: "glassBlur"))
+    }
     static var limit: Int { let v = d.integer(forKey: "limit"); return v > 0 ? v : 25 }
 }

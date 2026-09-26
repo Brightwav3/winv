@@ -8,6 +8,12 @@ struct SettingsView: View {
     @AppStorage("plainDefault") private var plainDefault = false
     @AppStorage("limit") private var limit = 25
     @AppStorage("autoUpdate") private var autoUpdate = true
+    @AppStorage("minimal") private var minimal = false
+    @AppStorage("glassOn") private var glassOn = true
+    @AppStorage("glassTransparency") private var glassTransparency = 0.58
+    @AppStorage("glassHue") private var glassHue = 0.0
+    @AppStorage("glassSaturation") private var glassSaturation = 0.0
+    @AppStorage("glassBlur") private var glassBlur = 0.0
     @AppStorage("theme") private var theme = AppTheme.system.rawValue
     @Namespace private var themeNS
     @State private var login = SMAppService.mainApp.status == .enabled
@@ -89,6 +95,9 @@ struct SettingsView: View {
                     .padding(2)
                     .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.line))
                 }
+                row("Minimalistic mode", "Just your copied items on glass — no search, filters or details.") {
+                    Toggle("", isOn: $minimal).toggleStyle(PillToggle())
+                }
                 row("Paste as plain text by default", "Strip formatting on paste.") {
                     Toggle("", isOn: $plainDefault).toggleStyle(PillToggle())
                 }
@@ -98,6 +107,15 @@ struct SettingsView: View {
                             try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
                         }
                 }
+            }
+            group("Glass") {
+                row("Transparency", "Off gives the panel a solid background.", first: true) {
+                    Toggle("", isOn: $glassOn).toggleStyle(PillToggle())
+                }
+                slider("Transparency level", $glassTransparency)
+                slider("Hue", $glassHue, hue: true)
+                slider("Saturation", $glassSaturation)
+                slider("Blur", $glassBlur)
             }
             group("Updates") {
                 row("Check for updates automatically", "Notifies you when a new version is out.", first: true) {
@@ -156,6 +174,21 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .overlay(alignment: .top) { if !first { Rectangle().fill(Color.ink.opacity(0.07)).frame(height: 1) } }
+    }
+
+    private func slider(_ label: String, _ value: Binding<Double>, hue: Bool = false) -> some View {
+        row(label, nil) {
+            HStack(spacing: 8) {
+                if hue {
+                    Circle().fill(Color(hue: value.wrappedValue, saturation: max(glassSaturation, 0.6), brightness: 0.9))
+                        .frame(width: 12, height: 12)
+                }
+                Slider(value: value, in: 0...1).frame(width: 180).controlSize(.small)
+                Text("\(Int(value.wrappedValue * 100))%").font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(Color.ink3).frame(width: 34, alignment: .trailing)
+            }
+            .disabled(!glassOn).opacity(glassOn ? 1 : 0.4)
+        }
     }
 
     private func valueBox(_ s: String) -> some View {
@@ -273,7 +306,7 @@ enum Windows {
         var size = NSHostingView(rootView: view).fittingSize
         let maxH = (NSScreen.main?.visibleFrame.height ?? 800) - 80
         if key == "settings" { size.height = min(720, maxH) } else { size.height = min(size.height, maxH) }
-        let w = Glass.window(title: title, size: size, frost: key == "settings", view)
+        let w = Glass.window(title: title, size: size, tunable: key == "settings", view)
         if key == "settings" {
             w.styleMask.insert(.resizable)
             w.contentMinSize = NSSize(width: size.width, height: 300)

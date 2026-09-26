@@ -126,10 +126,10 @@ enum Access {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
 
-    /// Screen point (Cocoa coordinates) just below the text caret of the focused app,
-    /// falling back to the mouse location.
-    static func caretPoint() -> NSPoint {
-        guard trusted else { return NSEvent.mouseLocation }
+    /// Screen rect (Cocoa coordinates) of the text line holding the caret; zero-height at the mouse as fallback.
+    static func caretRect() -> NSRect {
+        let mouse = NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        guard trusted else { return mouse }
         let sys = AXUIElementCreateSystemWide()
         var focused: CFTypeRef?
         var range: CFTypeRef?
@@ -140,12 +140,12 @@ enum Access {
               let r = range,
               AXUIElementCopyParameterizedAttributeValue(el as! AXUIElement, kAXBoundsForRangeParameterizedAttribute as CFString, r, &bounds) == .success,
               let b = bounds
-        else { return NSEvent.mouseLocation }
+        else { return mouse }
         var rect = CGRect.zero
         AXValueGetValue(b as! AXValue, .cgRect, &rect)
-        guard rect.width + rect.height > 0 else { return NSEvent.mouseLocation }
+        guard rect.width + rect.height > 0 else { return mouse }
         let h = NSScreen.screens.first?.frame.height ?? 0
-        return NSPoint(x: rect.minX, y: h - rect.maxY - 4)  // AX is top-left origin
+        return NSRect(x: rect.minX, y: h - rect.maxY, width: rect.width, height: rect.height)  // AX is top-left origin
     }
 
     /// Simulate ⌘V in the frontmost app.

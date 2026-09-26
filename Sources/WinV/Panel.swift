@@ -25,10 +25,12 @@ final class PanelController {
         panel = p
         model.reset()
         let size = NSSize(width: 360, height: 520)
-        var origin = Access.caretPoint()
-        origin.y -= size.height
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(Access.caretPoint()) }) ?? NSScreen.main {
+        // Sit above the caret's line (bottom edge on the line); if that doesn't fit, hang below it.
+        let line = Access.caretRect()
+        var origin = NSPoint(x: line.minX, y: line.maxY + 4)
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(line.origin) }) ?? NSScreen.main {
             let v = screen.visibleFrame
+            if origin.y + size.height > v.maxY - 8 { origin.y = line.minY - 4 - size.height }
             origin.x = min(max(origin.x, v.minX + 8), v.maxX - size.width - 8)
             origin.y = min(max(origin.y, v.minY + 8), v.maxY - size.height - 8)
         }
@@ -57,7 +59,7 @@ final class PanelController {
         p.isOpaque = false
         p.hasShadow = true
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        p.contentView = Glass.surface(HistoryView(model: model), cornerRadius: 16)
+        p.contentView = Glass.surface(HistoryView(model: model), cornerRadius: 16, tunable: true)
         p.setContentSize(NSSize(width: 360, height: 520))
         return p
     }
@@ -73,9 +75,10 @@ final class PanelModel {
     var recording: UUID?      // pinned item waiting for a shortcut key combo
     var dragging: UUID?       // row being dragged to reorder
     var cmdHeld = false       // shows the ⌘1–9 hints
+    var expanded: Set<UUID> = []   // minimal rows with the ⋯ tiles rolled out; collapsed on each open
 
     func reset() {
-        query = ""; filter = .all; recording = nil; dragging = nil
+        query = ""; filter = .all; recording = nil; dragging = nil; expanded = []
         historyOn = Settings.historyOn
         selected = visible.first?.id
     }
@@ -147,10 +150,11 @@ final class PanelModel {
 struct HistoryView: View {
     @Bindable var model: PanelModel
     @FocusState private var searchFocused: Bool
+    @AppStorage("minimal") private var minimal = false
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.historyOn { content } else { off }
+            if !model.historyOn { off } else if minimal { minimalContent } else { content }
         }
         .frame(width: 360, height: 520, alignment: .top)
         .focusEffectDisabled()
@@ -239,6 +243,38 @@ struct HistoryView: View {
         }
         .font(.system(size: 12)).foregroundStyle(Color.ink3)
         .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    /// Minimalistic mode: bare glass, items shown as they are, a small pin on the right.
+    @ViewBuilder private var minimalContent: some View {
+        let list = model.visible
+        if list.isEmpty {
+            Image(systemName: "doc.on.clipboard").font(.system(size: 26)).foregroundStyle(Color.ink3)
+                .frame(maxHeight: .infinity)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(list) { item in
+                            MinimalRow(item: item, selected: item.id == model.selected,
+                                       actions: Binding(get: { model.expanded.contains(item.id) },
+                                                        set: { if $0 { model.expanded.insert(item.id) } else { model.expanded.remove(item.id) } }),
+                                       paste: { model.paste(item) }, pastePlain: { model.paste(item, plain: true) })
+                                .id(item.id)
+                        }
+                    }
+                    .padding(8)
+                }
+                .frame(maxHeight: .infinity)
+                .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
+            }
+        }
+        HStack {
+            TrashButton { Store.shared.clear(); model.selected = model.visible.first?.id }
+            Spacer()
+            SettingsGear()
+        }
+        .padding(.horizontal, 8).padding(.bottom, 6)
     }
 
     private var off: some View {
@@ -382,11 +418,11 @@ private struct Row: View {
         }
     }
 
-    private static func loadThumbnail(at url: URL) async -> NSImage? {
+    static func loadThumbnail(at url: URL, size: CGFloat = 64) async -> NSImage? {
         await withCheckedContinuation { continuation in
             let request = QLThumbnailGenerator.Request(
                 fileAt: url,
-                size: NSSize(width: 64, height: 64),
+                size: NSSize(width: size, height: size),
                 scale: 2,
                 representationTypes: .all
             )
@@ -403,6 +439,142 @@ private struct Row: View {
                 .onTapGesture(perform: action)
         }
         .help(help)
+    }
+}
+
+private struct MinimalRow: View {
+    let item: ClipItem
+    let selected: Bool
+    @Binding var actions: Bool   // ⋯ tiles rolled out
+    let paste: () -> Void
+    let pastePlain: () -> Void
+    @State private var hover = false
+    @State private var preview: NSImage?
+    /// Panel 360 − list padding 16.
+    static let cardWidth: CGFloat = 344
+    static let height = ceil(NSFont.systemFont(ofSize: 13).boundingRectForFont.height) * 3 + 4   // 3 lines + spacing
+
+    /// Copied images and copied files (e.g. a PNG from Finder) both get a real preview.
+    private var previewURL: URL? {
+        switch item.kind {
+        case .image: item.image.map { Store.shared.imageURL($0) }
+        case .file: item.files?.first.map { URL(fileURLWithPath: $0) }
+        default: nil
+        }
+    }
+
+    var body: some View {
+        // Windows-style: the whole card keeps its width and slides left past the panel
+        // edge, and the action tiles appear beside it.
+        HStack(spacing: 6) {
+            card.frame(width: Self.cardWidth)
+            if actions {
+                if item.kind != .image {   // pictures have no plain-text form
+                    actionTile("list.clipboard", color: .ink, help: "Paste as plain text", action: pastePlain)
+                }
+                actionTile("trash", color: Color(nsColor: .systemRed), help: "Remove") {
+                    withAnimation(.easeOut(duration: 0.15)) { Store.shared.remove(item.id) }
+                }
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)   // keep full width so the tiles never get squeezed out
+        .frame(width: Self.cardWidth, alignment: .trailing)
+        .clipped()
+    }
+
+    private var card: some View {
+        HStack(alignment: .top, spacing: 8) {
+            clip
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: Self.height, alignment: .topLeading)
+                .clipped()
+            VStack(spacing: 0) {
+                glyph("ellipsis", color: actions ? .ink : .ink3, help: "More") {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { actions.toggle() }
+                }
+                Spacer(minLength: 0)
+                glyph(item.pinned ? "pin.fill" : "pin", color: item.pinned ? .accent : .ink3, help: "Pin") {
+                    Store.shared.togglePin(item.id)
+                }
+            }
+            .frame(height: Self.height)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(selected || hover ? Color.ink.opacity(0.06) : .clear))
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture(perform: paste)
+    }
+
+    @ViewBuilder private var clip: some View {
+        Group {
+            if let img = preview {
+                Image(nsImage: img).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Text(item.text).font(.system(size: 13)).foregroundStyle(Color.ink)
+                    .lineLimit(3).lineSpacing(2)
+            }
+        }
+        .task(id: previewURL?.absoluteString) {
+            preview = nil
+            guard let url = previewURL else { return }
+            // Image blobs are written in the background, so retry briefly.
+            for _ in 0..<12 {
+                if Task.isCancelled { return }
+                if let img = await Row.loadThumbnail(at: url, size: 300) { preview = img; return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
+    /// Square tile as tall as the card: bare icon, outlined on hover.
+    private func actionTile(_ name: String, color: Color, help: String, action: @escaping () -> Void) -> some View {
+        ActionTile(name: name, color: color, size: Self.height + 20, action: action).help(help)
+    }
+
+    private func glyph(_ name: String, color: Color, help: String, action: @escaping () -> Void) -> some View {
+        Image(systemName: name).font(.system(size: 10)).foregroundStyle(color)
+            .frame(width: 18, height: 18).contentShape(Rectangle())
+            .onTapGesture(perform: action)
+            .help(help)
+    }
+}
+
+private struct ActionTile: View {
+    let name: String
+    let color: Color
+    let size: CGFloat
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Image(systemName: name).font(.system(size: 15)).foregroundStyle(color)
+            .frame(width: size, height: size)
+            .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Color.ink.opacity(0.06) : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(hover ? Color.ink.opacity(0.7) : .clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .onTapGesture(perform: action)
+    }
+}
+
+/// Small red bin (Clear all) that shivers while hovered.
+private struct TrashButton: View {
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        TimelineView(.animation(paused: !hover)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            Image(systemName: "trash.fill").font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: .systemRed))
+                .rotationEffect(.degrees(hover ? sin(t * 45) * 12 : 0))
+        }
+        .frame(width: 21, height: 21).contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture(perform: action)
+        .help("Clear all")
     }
 }
 
