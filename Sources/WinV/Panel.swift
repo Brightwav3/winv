@@ -37,8 +37,9 @@ final class PanelController {
         p.setFrame(NSRect(origin: origin, size: size), display: false)
         p.makeKeyAndOrderFront(nil)
         model.cmdHeld = NSEvent.modifierFlags.contains(.command)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] e in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .scrollWheel]) { [weak self] e in
             if e.type == .flagsChanged { self?.model.cmdHeld = e.modifierFlags.contains(.command); return e }
+            if e.type == .scrollWheel { return self?.model.scroll(e) == true ? nil : e }
             return self?.model.handle(e) == true ? nil : e
         }
     }
@@ -75,10 +76,16 @@ final class PanelModel {
     var recording: UUID?      // pinned item waiting for a shortcut key combo
     var dragging: UUID?       // row being dragged to reorder
     var cmdHeld = false       // shows the ⌘1–9 hints
-    var expanded: Set<UUID> = []   // minimal rows with the ⋯ tiles rolled out; collapsed on each open
+    var expanded: Set<UUID> = []
+    var hovered: UUID?        // row under the pointer, target of a trackpad swipe
+    var swipeID: UUID?        // row being swiped left
+    var swipeDX: CGFloat = 0  // its current offset (≤ 0)
+    private var swipeCandidate: UUID?
+    static let swipeThreshold: CGFloat = 120   // past this the row turns red and deletes on release   // minimal rows with the ⋯ tiles rolled out; collapsed on each open
 
     func reset() {
         query = ""; filter = .all; recording = nil; dragging = nil; expanded = []
+        swipeID = nil; swipeDX = 0; hovered = nil
         historyOn = Settings.historyOn
         selected = visible.first?.id
     }
@@ -103,6 +110,48 @@ final class PanelModel {
     func paste(_ item: ClipItem, plain: Bool = Settings.plainDefault) {
         PanelController.shared.close()
         Paster.paste(item, plain: plain)
+    }
+
+    /// Two-finger swipe left on the hovered row: follows the fingers, deletes if released past the threshold.
+    /// Returns true when the event was consumed (so the list doesn't scroll).
+    func scroll(_ e: NSEvent) -> Bool {
+        guard e.hasPreciseScrollingDeltas else { return false }
+        if !e.momentumPhase.isEmpty { return swipeID != nil }   // swallow the fling after a swipe
+        // Finger direction, independent of the natural-scrolling setting.
+        let dx = e.isDirectionInvertedFromDevice ? e.scrollingDeltaX : -e.scrollingDeltaX
+        switch e.phase {
+        case .began:
+            swipeCandidate = hovered
+            if swipeID != nil, swipeDX == 0 { swipeID = nil }
+            return false
+        case .changed:
+            if swipeID == nil {
+                // Decide once, on the first real movement: mostly sideways → swipe, else normal scroll.
+                guard let id = swipeCandidate, e.scrollingDeltaX != 0 || e.scrollingDeltaY != 0 else { return false }
+                swipeCandidate = nil
+                guard abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY) * 1.2, dx < 0 else { return false }
+                swipeID = id
+                swipeDX = 0
+            }
+            swipeDX = min(0, swipeDX + dx)
+            return true
+        case .ended, .cancelled:
+            swipeCandidate = nil
+            guard let id = swipeID else { return false }
+            if swipeDX <= -Self.swipeThreshold {
+                withAnimation(.easeOut(duration: 0.18)) { swipeDX = -420 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [self] in
+                    withAnimation(.easeOut(duration: 0.2)) { Store.shared.remove(id) }
+                    if selected == id { selected = visible.first?.id }
+                    swipeID = nil; swipeDX = 0
+                }
+            } else {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { swipeDX = 0 }
+            }
+            return true
+        default:
+            return swipeID != nil
+        }
     }
 
     /// Returns true when the key was consumed.
@@ -226,6 +275,7 @@ struct HistoryView: View {
                                 return NSItemProvider(object: item.id.uuidString as NSString)
                             }
                             .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
+                            .swipeToDelete(item.id, model: model)
                         }
                     }
                     .padding(8)
@@ -267,6 +317,7 @@ struct HistoryView: View {
                                     return NSItemProvider(object: item.id.uuidString as NSString)
                                 }
                                 .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
+                                .swipeToDelete(item.id, model: model)
                         }
                     }
                     .padding(8)
@@ -295,6 +346,41 @@ struct HistoryView: View {
         }
         .padding(.horizontal, 28)
         .frame(maxHeight: .infinity)
+    }
+}
+
+/// Row follows a two-finger swipe left; a bin shows behind it and turns red once release would delete.
+private struct SwipeToDelete: ViewModifier {
+    let id: UUID
+    let model: PanelModel
+
+    func body(content: Content) -> some View {
+        let dx = model.swipeID == id ? model.swipeDX : 0
+        let armed = dx <= -PanelModel.swipeThreshold
+        content
+            .offset(x: dx)
+            .background {
+                if dx < 0 {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(armed ? Color(nsColor: .systemRed) : Color.ink.opacity(0.08))
+                        .overlay(alignment: .trailing) {
+                            Image(systemName: "trash.fill").font(.system(size: 14))
+                                .foregroundStyle(armed ? Color.white : Color.ink3)
+                                .scaleEffect(armed ? 1.15 : 1)
+                                .padding(.trailing, 18)
+                        }
+                        .animation(.easeOut(duration: 0.15), value: armed)
+                }
+            }
+            .onHover { inside in
+                if inside { model.hovered = id } else if model.hovered == id { model.hovered = nil }
+            }
+    }
+}
+
+extension View {
+    fileprivate func swipeToDelete(_ id: UUID, model: PanelModel) -> some View {
+        modifier(SwipeToDelete(id: id, model: model))
     }
 }
 
