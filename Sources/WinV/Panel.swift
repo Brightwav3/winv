@@ -261,6 +261,12 @@ struct HistoryView: View {
                                                         set: { if $0 { model.expanded.insert(item.id) } else { model.expanded.remove(item.id) } }),
                                        paste: { model.paste(item) }, pastePlain: { model.paste(item, plain: true) })
                                 .id(item.id)
+                                .opacity(model.dragging == item.id ? 0.4 : 1)
+                                .onDrag {
+                                    model.dragging = item.id
+                                    return NSItemProvider(object: item.id.uuidString as NSString)
+                                }
+                                .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
                         }
                     }
                     .padding(8)
@@ -511,6 +517,14 @@ private struct MinimalRow: View {
             if let img = preview {
                 Image(nsImage: img).resizable().scaledToFit()
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else if item.kind == .color, let color = Color(hexString: item.text) {
+                // Copied colour: a swatch filling the row height, value beside it.
+                HStack(spacing: 10) {
+                    RoundedRectangle(cornerRadius: 6).fill(color)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.ink.opacity(0.12)))
+                        .frame(width: Self.height * 1.6, height: Self.height)
+                    Text(item.text).font(.system(size: 13, design: .monospaced)).foregroundStyle(Color.ink)
+                }
             } else {
                 Text(item.text).font(.system(size: 13)).foregroundStyle(Color.ink)
                     .lineLimit(3).lineSpacing(2)
