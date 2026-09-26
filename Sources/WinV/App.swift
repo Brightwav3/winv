@@ -20,6 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKey.syncPinned(Store.shared.items)
         Updater.shared.start()
         if !UserDefaults.standard.bool(forKey: "onboarded") { Windows.onboarding() }
+
+        // Flush any pending clipboard-history write before the process disappears —
+        // covers ⌘Q, logout, restart, and shutdown alike.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { Store.shared.flush() } }
+    }
+
+    func applicationWillTerminate(_ note: Notification) {
+        Store.shared.flush()
     }
 }
 

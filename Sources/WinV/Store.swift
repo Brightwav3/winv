@@ -146,12 +146,21 @@ final class Store {
         guard !saveScheduled else { return }
         saveScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
+            guard saveScheduled else { return }   // already flushed synchronously
             saveScheduled = false
-            let snapshot = items
-            DispatchQueue.global(qos: .utility).async { [file] in
-                try? JSONEncoder().encode(snapshot).write(to: file, options: .atomic)
-            }
+            writeToDisk()
         }
+    }
+
+    private func writeToDisk() {
+        try? JSONEncoder().encode(items).write(to: file, options: .atomic)
+    }
+
+    /// Writes any pending coalesced save immediately. Call on quit/logout/restart —
+    /// the async-after save would otherwise be lost if the process exits first.
+    func flush() {
+        saveScheduled = false
+        writeToDisk()
     }
 
     // MARK: paste
