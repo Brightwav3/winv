@@ -24,17 +24,20 @@ final class PanelController {
         let p = panel ?? makePanel()
         panel = p
         model.reset()
-        let size = NSSize(width: 360, height: 520)
+        // Place for the tallest the panel can get, so it never has to flip sides while growing.
+        let size = NSSize(width: 360, height: PanelModel.maxHeight)
         // Sit above the caret's line (bottom edge on the line); if that doesn't fit, hang below it.
         let line = Access.caretRect()
         var origin = NSPoint(x: line.minX, y: line.maxY + 4)
+        hangsBelow = false
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(line.origin) }) ?? NSScreen.main {
             let v = screen.visibleFrame
-            if origin.y + size.height > v.maxY - 8 { origin.y = line.minY - 4 - size.height }
+            if origin.y + size.height > v.maxY - 8 { origin.y = line.minY - 4 - size.height; hangsBelow = true }
             origin.x = min(max(origin.x, v.minX + 8), v.maxX - size.width - 8)
             origin.y = min(max(origin.y, v.minY + 8), v.maxY - size.height - 8)
         }
         p.setFrame(NSRect(origin: origin, size: size), display: false)
+        resize(to: model.height)
         p.makeKeyAndOrderFront(nil)
         model.cmdHeld = NSEvent.modifierFlags.contains(.command)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .scrollWheel]) { [weak self] e in
@@ -43,6 +46,22 @@ final class PanelController {
             return self?.model.handle(e) == true ? nil : e
         }
     }
+
+    /// Fits the panel to its content. Above the line the bottom edge stays put; below it, the top does.
+    func resize(to height: CGFloat) {
+        guard let p = panel, abs(p.frame.height - height) > 0.5 else { return }
+        var f = p.frame
+        if hangsBelow { f.origin.y = f.maxY - height }
+        f.size.height = height
+        guard p.isVisible else { p.setFrame(f, display: false); return }
+        // Glide to the new size so deleting clips collapses the panel smoothly.
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            p.animator().setFrame(f, display: true)
+        }
+    }
+    private var hangsBelow = false
 
     func close() {
         model.recording = nil
@@ -88,6 +107,23 @@ final class PanelModel {
     var swipeDX: CGFloat = 0  // its current offset (≤ 0)
     private var swipeCandidate: UUID?
     static let tile: CGFloat = 64, tileGap: CGFloat = 6
+    /// The panel fits its clips (at least one) up to this height, then scrolls.
+    static let maxHeight: CGFloat = 520
+    var headerHeight: CGFloat = 0
+    var listHeight: CGFloat = 0
+    var footerHeight: CGFloat = 0
+    var height: CGFloat {
+        // Keep the initial panel large enough to lay out and measure its content.
+        if !historyOn { return listHeight > 0 ? min(Self.maxHeight, listHeight.rounded(.up)) : Self.maxHeight }
+        let minimal = Settings.minimal
+        guard listHeight > 0, footerHeight > 0, minimal || headerHeight > 0 else { return Self.maxHeight }
+        // Eight rows always fill the panel. Below that, use their measured height
+        // so the window loses exactly the space freed by each removed clip.
+        if visible.count >= 8 { return Self.maxHeight }
+        let oneRow = minimal ? MinimalRow.height + 20 : CGFloat(52)
+        let minimumList = oneRow + 16 // row plus the list's vertical padding
+        return min(Self.maxHeight, (headerHeight + max(listHeight, minimumList) + footerHeight).rounded(.up))
+    }
     static let deleteExtra: CGFloat = 90   // swipe this far past the open tray → trash turns red
 
     /// Width of the tray a swipe opens: plain-text tile (not for pictures) + trash tile.
@@ -112,6 +148,7 @@ final class PanelModel {
         query = ""; filter = .all; recording = nil; dragging = nil; expanded = []
         swipeID = nil; swipeDX = 0; hovered = nil
         historyOn = Settings.historyOn
+        headerHeight = 0; listHeight = 0; footerHeight = 0
         selected = visible.first?.id
     }
 
@@ -190,6 +227,21 @@ final class PanelModel {
         let list = visible
         let idx = list.firstIndex { $0.id == selected }
         let cmd = e.modifierFlags.contains(.command)
+        // Match the character, not the US keyboard's physical Z key (keyCode 6).
+        // On Czech QWERTZ, the Z key occupies a different physical position.
+        let undoKey = e.charactersIgnoringModifiers?.lowercased() == "z"
+            || (e.charactersIgnoringModifiers == nil && e.keyCode == 6)
+        if cmd, undoKey, !e.modifierFlags.contains([.shift, .option, .control]) {
+            guard Store.shared.canUndo else { return false }
+            let before = Set(Store.shared.items.map(\.id))
+            withAnimation(.easeOut(duration: 0.2)) { Store.shared.undo() }
+            if let restored = visible.first(where: { !before.contains($0.id) }) {
+                selected = restored.id
+            } else if !visible.contains(where: { $0.id == selected }) {
+                selected = visible.first?.id
+            }
+            return true
+        }
         switch Int(e.keyCode) {
         case 125: // ↓
             if let i = idx { selected = list[min(i + 1, list.count - 1)].id } else { selected = list.first?.id }
@@ -204,10 +256,6 @@ final class PanelModel {
             let next = list.indices.contains(i + 1) ? list[i + 1].id : (i > 0 ? list[i - 1].id : nil)
             Store.shared.remove(list[i].id)
             selected = next
-        case 6 where cmd: // ⌘Z brings back the last removal
-            guard Store.shared.canUndo else { return false }
-            withAnimation(.easeOut(duration: 0.2)) { Store.shared.undo() }
-            if selected == nil || !list.contains(where: { $0.id == selected }) { selected = visible.first?.id }
         case 35 where cmd: // ⌘P
             if let i = idx { Store.shared.togglePin(list[i].id) }
         case 18...28 where cmd: // ⌘1…⌘9
@@ -230,7 +278,14 @@ struct HistoryView: View {
         VStack(spacing: 0) {
             if !model.historyOn { off } else if minimal { minimalContent } else { content }
         }
-        .frame(width: 360, height: 520, alignment: .top)
+        .frame(width: 360, height: model.height, alignment: .top)
+        .onChange(of: model.height) { _, h in PanelController.shared.resize(to: h) }
+        .onChange(of: minimal) { _, _ in
+            model.headerHeight = 0; model.listHeight = 0; model.footerHeight = 0
+        }
+        .onChange(of: model.historyOn) { _, _ in
+            model.headerHeight = 0; model.listHeight = 0; model.footerHeight = 0
+        }
         .focusEffectDisabled()
         .legible()
         .onAppear { searchFocused = true }
@@ -270,40 +325,31 @@ struct HistoryView: View {
             }
         }
         .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
+        .measure { model.headerHeight = $0 }
 
         let list = model.visible
         if list.isEmpty {
-            VStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: "doc.on.clipboard").font(.system(size: 26)).foregroundStyle(Color.ink3)
-                Text("Nothing here yet").font(.system(size: 14, weight: .medium)).foregroundStyle(Color.ink)
-                Text(Store.shared.items.isEmpty
-                     ? "Copy text, images or files and they'll appear here. Press \(HotKey.main.label) any time to open history."
-                     : "No items match.")
-                    .font(.system(size: 12)).foregroundStyle(Color.ink2).multilineTextAlignment(.center).lineSpacing(3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Store.shared.items.isEmpty ? "Nothing here yet" : "No items match")
+                        .font(.system(size: 14, weight: .medium)).foregroundStyle(Color.ink)
+                    Text(Store.shared.items.isEmpty ? "Copy something to add a clip." : "Try another search or filter.")
+                        .font(.system(size: 12)).foregroundStyle(Color.ink2)
+                }
             }
-            .padding(.horizontal, 28)
-            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(height: 68) // same list space as one compact clip
+            .measure { model.listHeight = $0 }
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(list) { item in
-                            Row(item: item, selected: item.id == model.selected,
-                                recording: model.recording == item.id,
-                                quick: model.cmdHeld ? model.quickIndex(item.id) : nil,
-                                record: { model.recording = model.recording == item.id ? nil : item.id },
-                                paste: { model.paste(item) })
-                            .id(item.id)
-                            .opacity(model.dragging == item.id ? 0.4 : 1)
-                            .onDrag {
-                                model.dragging = item.id
-                                return NSItemProvider(object: item.id.uuidString as NSString)
-                            }
-                            .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
-                            .swipeToDelete(item, model: model)
-                        }
+                    Group {
+                        if list.count < 8 { VStack(spacing: 4) { historyRows(list) } }
+                        else { LazyVStack(spacing: 4) { historyRows(list) } }
                     }
                     .padding(8)
+                    .measure { model.listHeight = $0 }
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
@@ -318,6 +364,7 @@ struct HistoryView: View {
         }
         .font(.system(size: 12)).foregroundStyle(Color.ink3)
         .padding(.horizontal, 12).padding(.vertical, 8)
+        .measure { model.footerHeight = $0 }
     }
 
     /// Minimalistic mode: bare glass, items shown as they are, a small pin on the right.
@@ -325,28 +372,17 @@ struct HistoryView: View {
         let list = model.visible
         if list.isEmpty {
             Image(systemName: "doc.on.clipboard").font(.system(size: 26)).foregroundStyle(Color.ink3)
-                .frame(maxHeight: .infinity)
+                .frame(maxWidth: .infinity).frame(height: MinimalRow.height + 36)   // one clip's worth
+                .measure { model.listHeight = $0 }
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(list) { item in
-                            MinimalRow(item: item, selected: item.id == model.selected,
-                                       quick: model.cmdHeld ? model.quickIndex(item.id) : nil,
-                                       actions: Binding(get: { model.expanded.contains(item.id) },
-                                                        set: { if $0 { model.expanded.insert(item.id) } else { model.expanded.remove(item.id) } }),
-                                       paste: { model.paste(item) }, pastePlain: { model.paste(item, plain: true) })
-                                .id(item.id)
-                                .opacity(model.dragging == item.id ? 0.4 : 1)
-                                .onDrag {
-                                    model.dragging = item.id
-                                    return NSItemProvider(object: item.id.uuidString as NSString)
-                                }
-                                .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
-                                .swipeToDelete(item, model: model)
-                        }
+                    Group {
+                        if list.count < 8 { VStack(spacing: 4) { minimalRows(list) } }
+                        else { LazyVStack(spacing: 4) { minimalRows(list) } }
                     }
                     .padding(8)
+                    .measure { model.listHeight = $0 }
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
@@ -358,6 +394,44 @@ struct HistoryView: View {
             SettingsGear()
         }
         .padding(.horizontal, 8).padding(.bottom, 6)
+        .measure { model.footerHeight = $0 }
+        .onAppear { model.headerHeight = 0 }   // minimalistic mode has no top bar
+    }
+
+    private func historyRows(_ list: [ClipItem]) -> some View {
+        ForEach(list) { item in
+            Row(item: item, selected: item.id == model.selected,
+                recording: model.recording == item.id,
+                quick: model.cmdHeld ? model.quickIndex(item.id) : nil,
+                record: { model.recording = model.recording == item.id ? nil : item.id },
+                paste: { model.paste(item) })
+            .id(item.id)
+            .opacity(model.dragging == item.id ? 0.4 : 1)
+            .onDrag {
+                model.dragging = item.id
+                return NSItemProvider(object: item.id.uuidString as NSString)
+            }
+            .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
+            .swipeToDelete(item, model: model)
+        }
+    }
+
+    private func minimalRows(_ list: [ClipItem]) -> some View {
+        ForEach(list) { item in
+            MinimalRow(item: item, selected: item.id == model.selected,
+                       quick: model.cmdHeld ? model.quickIndex(item.id) : nil,
+                       actions: Binding(get: { model.expanded.contains(item.id) },
+                                        set: { if $0 { model.expanded.insert(item.id) } else { model.expanded.remove(item.id) } }),
+                       paste: { model.paste(item) }, pastePlain: { model.paste(item, plain: true) })
+                .id(item.id)
+                .opacity(model.dragging == item.id ? 0.4 : 1)
+                .onDrag {
+                    model.dragging = item.id
+                    return NSItemProvider(object: item.id.uuidString as NSString)
+                }
+                .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
+                .swipeToDelete(item, model: model)
+        }
     }
 
     private var off: some View {
@@ -370,8 +444,8 @@ struct HistoryView: View {
                 model.historyOn = true
             }.buttonStyle(PillButton())
         }
-        .padding(.horizontal, 28)
-        .frame(maxHeight: .infinity)
+        .padding(.horizontal, 28).padding(.vertical, 32)
+        .measure { model.headerHeight = 0; model.footerHeight = 0; model.listHeight = $0 }
     }
 }
 
@@ -424,6 +498,11 @@ private struct SwipeToDelete: ViewModifier {
 }
 
 extension View {
+    /// Reports this view's laid-out height (drives the panel's size).
+    fileprivate func measure(_ report: @escaping (CGFloat) -> Void) -> some View {
+        onGeometryChange(for: CGFloat.self) { $0.size.height } action: { report($0) }
+    }
+
     fileprivate func swipeToDelete(_ item: ClipItem, model: PanelModel) -> some View {
         modifier(SwipeToDelete(item: item, model: model))
     }
