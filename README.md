@@ -17,7 +17,7 @@ Press a shortcut anywhere, pick something you copied earlier, and it gets pasted
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy_me_a_coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/brightwave)
 [![Stars](https://img.shields.io/github/stars/Brightwav3/winv?style=flat&logo=github)](https://github.com/Brightwav3/winv/stargazers)
 
-[Features](#features) · [Install](#install) · [Shortcuts](#keyboard-shortcuts) · [Build](#build-from-source) · [Privacy](#privacy)
+[Gatekeeper](#gatekeeper-app-cant-be-opened) · [Features](#features) · [Install](#install) · [Shortcuts](#keyboard-shortcuts) · [Build](#build-from-source) · [Privacy](#privacy)
 
 </div>
 
@@ -27,25 +27,68 @@ Press a shortcut anywhere, pick something you copied earlier, and it gets pasted
 
 ---
 
+## Gatekeeper: "app can't be opened"
+
+WinV isn't signed with an Apple Developer ID or notarized by Apple, so **Gatekeeper**, the macOS security check for downloaded apps, blocks it on first launch. You'll see a message like *"WinV" can't be opened because Apple cannot check it for malicious software* or *"WinV" Not Opened*. This is expected for free apps distributed outside the App Store; the full source code is in this repository.
+
+To allow it once:
+
+1. Try to open WinV, then close the warning.
+2. Open **System Settings › Privacy & Security**.
+3. Scroll down to the **Security** section. Next to the message about WinV, click **Open Anyway**.
+4. Confirm with your password or Touch ID, then click **Open**.
+
+On macOS 14 Sonoma you can also right-click WinV in Applications and choose **Open**. From macOS 15 Sequoia on, only the System Settings route works.
+
+Alternatively, remove the quarantine flag in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/WinV.app
+```
+
+You only need to do this once. Updates installed from inside WinV open normally.
+
+---
+
 ## Features
 
-- ⌨️ **Open anywhere.** The history panel opens right at your text cursor. The default shortcut is **⌥V**, and you can change it in Settings.
-- 📌 **Pins.** Pinned items stay at the top in the order you pinned them. They survive *Clear all* and restarts, and each one can have its own global paste shortcut.
-- ↕️ **Drag to reorder.** Drag items in the panel to arrange them. Pinned and unpinned items are reordered separately.
-- 🖼️ **Text, rich text, links and images.** You can search and filter them, and paste as plain text when you need to.
+### History panel
+- ⌨️ **Opens where you type.** Press **⌥V** (configurable) in any app. The panel appears just above the line you're typing on, or below it when there's no room. Without a text cursor it opens at the mouse.
+- 🖼️ **Everything you copy.** Text, rich text, links, colours, images and files. Images and files copied in Finder get real Quick Look previews; colours get a swatch.
+- 🔍 **Search and filter.** Type to search, and switch between *All*, *Pinned*, *Text* and *Images*.
+- 📋 **Paste as plain text.** Per paste with ⇧↩, or always, via Settings.
+- 🔢 **Quick paste.** Hold ⌘ to see numbers (in both panels), then ⌘1–⌘9 pastes one of the first nine items.
+- 📌 **Pins.** Pinned items stay at the top in the order you pinned them. They survive *Clear all* and restarts.
+- 🎹 **Pin shortcuts.** Give any pinned item its own global shortcut that pastes it from any app, without opening the panel.
+- ↕️ **Drag to reorder.** Drag items to arrange them. Pinned and unpinned items are reordered separately.
+- 👆 **Swipe to delete.** Hover a clip and swipe left with two fingers on the trackpad. A short swipe reveals *Paste as plain text* and *Remove*; keep swiping and the trash grows until it turns red, then let go to delete.
+- 🗑️ **Remove or clear.** Remove single items, or clear everything except pins.
+
+### Minimalistic mode
+- 🫧 **Just your clips.** An empty Liquid Glass panel that shows copied items as they are: no search bar, filters or metadata.
+- 📐 **Uniform rows.** Every clip is exactly three lines tall; pictures scale to fit.
+- ⋯ **Actions on demand.** The ⋯ button slides a clip aside to reveal *Paste as plain text* and *Remove*. The pin sits at the clip's bottom edge.
+- 🧹 **Corner controls.** A red *Clear all* bin that shivers on hover (bottom-left) and the Settings gear (bottom-right).
+
+### Look and feel
+- 🪟 **Liquid Glass UI.** Native macOS 26 glass, with a translucent fallback on older macOS versions.
+- 🎨 **Custom glass.** Sliders for transparency, hue, saturation and blur, plus a switch for a solid background. Changes apply live to the panel and the Settings window.
+- 🌗 **Appearance.** Follow the system, or always use Light or Dark.
+
+### Under the hood
 - 🔒 **Skips password managers.** Content marked as concealed is never recorded.
-- 🪟 **Liquid Glass UI.** Follows the system appearance, or pick Light or Dark in Settings.
-- 🔄 **Automatic updates.** WinV checks GitHub Releases, sends a notification when a new version is out, and installs it with one click (*Install & Relaunch*). You can turn this off in Settings.
-- 🪶 **Lightweight.** Lives in the menu bar with no Dock icon and no dependencies. It checks the clipboard every 0.5 s with a single counter read and stores history as one small JSON file.
+- ⏸️ **Pause or turn off history** at any time; choose how many items to keep (10–200). Pinned items are never removed.
+- 💾 **History survives quit and restart**, stored as one small JSON file on your Mac.
+- 🚀 **Open at login**, optionally.
+- 🔄 **Automatic updates.** WinV checks GitHub Releases, notifies you about new versions and installs them with one click (*Install & Relaunch*). You can turn this off.
+- 🪶 **Lightweight.** Lives in the menu bar with no Dock icon and no dependencies. It checks the clipboard every 0.5 s with a single counter read.
 
 ## Install
 
 1. Download `WinV.dmg` from [Releases](https://github.com/Brightwav3/winv/releases), or [build it yourself](#build-from-source).
 2. Drag **WinV** to **Applications** and launch it.
-3. Grant **Accessibility** permission when asked (System Settings › Privacy & Security › Accessibility). WinV needs it to paste into other apps and to find your text cursor.
-
-> [!NOTE]
-> WinV is not notarized yet. On first launch, right-click the app and choose **Open**, or allow it in System Settings › Privacy & Security.
+3. If macOS blocks it, follow [Gatekeeper](#gatekeeper-app-cant-be-opened) at the top.
+4. Grant **Accessibility** permission when asked (System Settings › Privacy & Security › Accessibility). WinV needs it to paste into other apps and to find your text cursor. Without it, WinV can only copy items back to the clipboard.
 
 ## Keyboard shortcuts
 
@@ -59,6 +102,7 @@ Press a shortcut anywhere, pick something you copied earlier, and it gets pasted
 | <kbd>⌘</kbd><kbd>P</kbd> | Pin / unpin |
 | <kbd>⌫</kbd> | Remove item |
 | <kbd>esc</kbd> | Close |
+| Two-finger swipe left | Delete the hovered item (trackpad) |
 
 ### Changing the shortcut
 

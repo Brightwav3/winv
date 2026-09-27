@@ -81,7 +81,26 @@ final class PanelModel {
     var swipeID: UUID?        // row being swiped left
     var swipeDX: CGFloat = 0  // its current offset (≤ 0)
     private var swipeCandidate: UUID?
-    static let swipeThreshold: CGFloat = 120   // past this the row turns red and deletes on release   // minimal rows with the ⋯ tiles rolled out; collapsed on each open
+    static let tile: CGFloat = 64, tileGap: CGFloat = 6
+    static let deleteExtra: CGFloat = 90   // swipe this far past the open tray → trash turns red
+
+    /// Width of the tray a swipe opens: plain-text tile (not for pictures) + trash tile.
+    func trayWidth(_ id: UUID) -> CGFloat {
+        let picture = Store.shared.items.first { $0.id == id }?.kind == .image
+        return (picture ? 1 : 2) * (Self.tile + Self.tileGap)
+    }
+    func armed(_ id: UUID) -> Bool { swipeID == id && -swipeDX >= trayWidth(id) + Self.deleteExtra }
+
+    func closeSwipe() { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipeDX = 0 } }
+
+    func deleteSwiped(_ id: UUID) {
+        withAnimation(.easeOut(duration: 0.18)) { swipeDX = -420 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [self] in
+            withAnimation(.easeOut(duration: 0.2)) { Store.shared.remove(id) }
+            if selected == id { selected = visible.first?.id }
+            swipeID = nil; swipeDX = 0
+        }
+    }   // minimal rows with the ⋯ tiles rolled out; collapsed on each open
 
     func reset() {
         query = ""; filter = .all; recording = nil; dragging = nil; expanded = []
@@ -121,8 +140,9 @@ final class PanelModel {
         let dx = e.isDirectionInvertedFromDevice ? e.scrollingDeltaX : -e.scrollingDeltaX
         switch e.phase {
         case .began:
+            if let open = swipeID, open == hovered, swipeDX < 0 { return true }   // keep dragging the open row
+            if swipeID != nil { closeSwipe(); swipeID = nil }
             swipeCandidate = hovered
-            if swipeID != nil, swipeDX == 0 { swipeID = nil }
             return false
         case .changed:
             if swipeID == nil {
@@ -138,16 +158,11 @@ final class PanelModel {
         case .ended, .cancelled:
             swipeCandidate = nil
             guard let id = swipeID else { return false }
-            if swipeDX <= -Self.swipeThreshold {
-                withAnimation(.easeOut(duration: 0.18)) { swipeDX = -420 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [self] in
-                    withAnimation(.easeOut(duration: 0.2)) { Store.shared.remove(id) }
-                    if selected == id { selected = visible.first?.id }
-                    swipeID = nil; swipeDX = 0
-                }
-            } else {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { swipeDX = 0 }
-            }
+            let tray = trayWidth(id)
+            if armed(id) { deleteSwiped(id) }
+            else if -swipeDX > tray / 2 {   // snap open: tiles stay, like ⋯
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipeDX = -tray }
+            } else { closeSwipe() }
             return true
         default:
             return swipeID != nil
@@ -275,7 +290,7 @@ struct HistoryView: View {
                                 return NSItemProvider(object: item.id.uuidString as NSString)
                             }
                             .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
-                            .swipeToDelete(item.id, model: model)
+                            .swipeToDelete(item, model: model)
                         }
                     }
                     .padding(8)
@@ -307,6 +322,7 @@ struct HistoryView: View {
                     LazyVStack(spacing: 4) {
                         ForEach(list) { item in
                             MinimalRow(item: item, selected: item.id == model.selected,
+                                       quick: model.cmdHeld ? model.quickIndex(item.id) : nil,
                                        actions: Binding(get: { model.expanded.contains(item.id) },
                                                         set: { if $0 { model.expanded.insert(item.id) } else { model.expanded.remove(item.id) } }),
                                        paste: { model.paste(item) }, pastePlain: { model.paste(item, plain: true) })
@@ -317,7 +333,7 @@ struct HistoryView: View {
                                     return NSItemProvider(object: item.id.uuidString as NSString)
                                 }
                                 .onDrop(of: [.text], delegate: ReorderDrop(target: item.id, model: model))
-                                .swipeToDelete(item.id, model: model)
+                                .swipeToDelete(item, model: model)
                         }
                     }
                     .padding(8)
@@ -349,38 +365,57 @@ struct HistoryView: View {
     }
 }
 
-/// Row follows a two-finger swipe left; a bin shows behind it and turns red once release would delete.
+/// Swipe left: the row slides aside to reveal the ⋯ tiles; swiping further stretches the
+/// trash tile until it turns red, and releasing then deletes.
 private struct SwipeToDelete: ViewModifier {
-    let id: UUID
+    let item: ClipItem
     let model: PanelModel
 
     func body(content: Content) -> some View {
-        let dx = model.swipeID == id ? model.swipeDX : 0
-        let armed = dx <= -PanelModel.swipeThreshold
+        let dx = model.swipeID == item.id ? model.swipeDX : 0
+        let armed = model.armed(item.id)
+        let picture = item.kind == .image
+        let plainW = picture ? 0 : PanelModel.tile + PanelModel.tileGap
+        let trashW = max(PanelModel.tile, -dx - PanelModel.tileGap - plainW)
         content
             .offset(x: dx)
-            .background {
+            .background(alignment: .trailing) {
                 if dx < 0 {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(armed ? Color(nsColor: .systemRed) : Color.ink.opacity(0.08))
-                        .overlay(alignment: .trailing) {
-                            Image(systemName: "trash.fill").font(.system(size: 14))
-                                .foregroundStyle(armed ? Color.white : Color.ink3)
-                                .scaleEffect(armed ? 1.15 : 1)
-                                .padding(.trailing, 18)
+                    HStack(spacing: PanelModel.tileGap) {
+                        if !picture {
+                            ActionTile(name: "list.clipboard", color: .ink, size: PanelModel.tile, fillHeight: true) {
+                                model.closeSwipe(); model.paste(item, plain: true)
+                            }
+                            .frame(maxHeight: .infinity)
+                            .help("Paste as plain text")
                         }
-                        .animation(.easeOut(duration: 0.15), value: armed)
+                        Image(systemName: "trash").font(.system(size: 15))
+                            .foregroundStyle(armed ? Color.white : Color(nsColor: .systemRed))
+                            .scaleEffect(armed ? 1.15 : 1)
+                            .frame(width: trashW).frame(maxHeight: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 8)
+                                .fill(armed ? Color(nsColor: .systemRed) : Color.ink.opacity(0.06)))
+                            .contentShape(Rectangle())
+                            .onTapGesture { model.deleteSwiped(item.id) }
+                            .help("Remove")
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: -dx, alignment: .trailing)
+                    .clipped()
+                    .animation(.easeOut(duration: 0.15), value: armed)
                 }
             }
+            // Everything stays inside the row's pill; the sliding content never spills past its edge.
+            .clipShape(RoundedRectangle(cornerRadius: 8))
             .onHover { inside in
-                if inside { model.hovered = id } else if model.hovered == id { model.hovered = nil }
+                if inside { model.hovered = item.id } else if model.hovered == item.id { model.hovered = nil }
             }
     }
 }
 
 extension View {
-    fileprivate func swipeToDelete(_ id: UUID, model: PanelModel) -> some View {
-        modifier(SwipeToDelete(id: id, model: model))
+    fileprivate func swipeToDelete(_ item: ClipItem, model: PanelModel) -> some View {
+        modifier(SwipeToDelete(item: item, model: model))
     }
 }
 
@@ -537,6 +572,7 @@ private struct Row: View {
 private struct MinimalRow: View {
     let item: ClipItem
     let selected: Bool
+    let quick: Int?              // position for ⌘1–9, shown while ⌘ is held
     @Binding var actions: Bool   // ⋯ tiles rolled out
     let paste: () -> Void
     let pastePlain: () -> Void
@@ -585,6 +621,10 @@ private struct MinimalRow: View {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { actions.toggle() }
                 }
                 Spacer(minLength: 0)
+                if let n = quick {
+                    Text("⌘\(n + 1)").font(.system(size: 10)).foregroundStyle(Color.ink3).fixedSize()
+                    Spacer(minLength: 0)
+                }
                 glyph(item.pinned ? "pin.fill" : "pin", color: item.pinned ? .accent : .ink3, help: "Pin") {
                     Store.shared.togglePin(item.id)
                 }
@@ -645,12 +685,14 @@ private struct ActionTile: View {
     let name: String
     let color: Color
     let size: CGFloat
+    var fillHeight = false   // match the row's height instead of being square
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Image(systemName: name).font(.system(size: 15)).foregroundStyle(color)
-            .frame(width: size, height: size)
+            .frame(width: size, height: fillHeight ? nil : size)
+            .frame(maxHeight: fillHeight ? .infinity : nil)
             .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Color.ink.opacity(0.06) : .clear))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(hover ? Color.ink.opacity(0.7) : .clear, lineWidth: 1.5))
             .contentShape(Rectangle())
