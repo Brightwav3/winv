@@ -90,6 +90,7 @@ final class PanelModel {
     var query = ""
     var filter = Filter.all
     var selected: UUID?
+    var scrollResetID = UUID()
     var historyOn = Settings.historyOn
     var recording: UUID? {    // pinned item waiting for a shortcut key combo
         didSet {   // global shortcuts must not swallow the combo being recorded
@@ -146,6 +147,7 @@ final class PanelModel {
         query = ""; filter = .all; recording = nil; dragging = nil; expanded = []
         swipeID = nil; swipeDX = 0; hovered = nil
         historyOn = Settings.historyOn
+        scrollResetID = UUID()
         selected = visible.first?.id
     }
 
@@ -341,6 +343,8 @@ struct HistoryView: View {
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
+                .onChange(of: model.scrollResetID) { _, _ in scrollToFirst(proxy) }
+                .onAppear { scrollToFirst(proxy) }
             }
         }
 
@@ -371,6 +375,8 @@ struct HistoryView: View {
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
+                .onChange(of: model.scrollResetID) { _, _ in scrollToFirst(proxy) }
+                .onAppear { scrollToFirst(proxy) }
             }
         }
         HStack {
@@ -380,6 +386,11 @@ struct HistoryView: View {
         }
         .padding(.horizontal, 8).padding(.bottom, 6)
         .frame(height: PanelModel.minimalFooterHeight)
+    }
+
+    private func scrollToFirst(_ proxy: ScrollViewProxy) {
+        guard let first = model.visible.first?.id else { return }
+        DispatchQueue.main.async { proxy.scrollTo(first, anchor: .top) }
     }
 
     private func historyRows(_ list: [ClipItem]) -> some View {
