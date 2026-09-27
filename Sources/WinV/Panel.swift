@@ -35,7 +35,11 @@ final class PanelController {
             origin.x = min(max(origin.x, v.minX + 8), v.maxX - size.width - 8)
             origin.y = min(max(origin.y, v.minY + 8), v.maxY - size.height - 8)
         }
-        p.setFrame(NSRect(origin: origin, size: size), display: false)
+        // Zero-length animation replaces any resize still in flight, so it can't land after this.
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            p.animator().setFrame(NSRect(origin: origin, size: size), display: false)
+        }
         p.makeKeyAndOrderFront(nil)
         model.cmdHeld = NSEvent.modifierFlags.contains(.command)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .scrollWheel]) { [weak self] e in
@@ -48,9 +52,8 @@ final class PanelController {
     /// Fits the panel to its content. Above the line the bottom edge stays put; below it, the top does.
     func resize(to height: CGFloat) {
         guard let p = panel, abs(p.frame.height - height) > 0.5 else { return }
-        var f = p.frame
-        if hangsBelow { f.origin.y = f.maxY - height }
-        f.size.height = height
+        let screen = p.screen ?? NSScreen.main
+        let f = Self.resized(p.frame, to: height, hangsBelow: hangsBelow, within: screen?.visibleFrame)
         guard p.isVisible else { p.setFrame(f, display: false); return }
         // Glide to the new size so deleting clips collapses the panel smoothly.
         NSAnimationContext.runAnimationGroup { ctx in
@@ -60,6 +63,18 @@ final class PanelController {
         }
     }
     private var hangsBelow = false
+
+    /// New frame for `height`, keeping the anchored edge and staying 8pt inside the visible screen area.
+    static func resized(_ frame: NSRect, to height: CGFloat, hangsBelow: Bool, within visible: NSRect?) -> NSRect {
+        var f = frame
+        if hangsBelow { f.origin.y = f.maxY - height }
+        f.size.height = height
+        if let v = visible {
+            f.origin.y = min(f.origin.y, v.maxY - height - 8)
+            f.origin.y = max(f.origin.y, v.minY + 8)
+        }
+        return f
+    }
 
     func close() {
         model.recording = nil
@@ -92,6 +107,7 @@ final class PanelModel {
     var selected: UUID?
     var scrollResetID = UUID()
     var historyOn = Settings.historyOn
+    var minimal = Settings.minimal   // mirrored from @AppStorage so height changes are observed
     var recording: UUID? {    // pinned item waiting for a shortcut key combo
         didSet {   // global shortcuts must not swallow the combo being recorded
             if oldValue == nil, recording != nil { HotKey.suspend() }
@@ -113,7 +129,7 @@ final class PanelModel {
     static let normalHeaderHeight: CGFloat = 76
     static let normalFooterHeight: CGFloat = 37
     static let minimalFooterHeight: CGFloat = 27
-    var height: CGFloat { Self.height(for: visible.count, minimal: Settings.minimal, historyOn: historyOn) }
+    var height: CGFloat { Self.height(for: visible.count, minimal: minimal, historyOn: historyOn) }
 
     static func height(for clipCount: Int, minimal: Bool, historyOn: Bool) -> CGFloat {
         if !historyOn { return 200 }
@@ -147,6 +163,7 @@ final class PanelModel {
         query = ""; filter = .all; recording = nil; dragging = nil; expanded = []
         swipeID = nil; swipeDX = 0; hovered = nil
         historyOn = Settings.historyOn
+        minimal = Settings.minimal
         scrollResetID = UUID()
         selected = visible.first?.id
     }
@@ -277,8 +294,10 @@ struct HistoryView: View {
         VStack(spacing: 0) {
             if !model.historyOn { off } else if minimal { minimalContent } else { content }
         }
-        .frame(width: 360, height: model.height, alignment: .top)
+        // Fill whatever the window is; the window follows model.height via resize(to:).
+        .frame(width: 360).frame(maxHeight: .infinity, alignment: .top)
         .onChange(of: model.height) { _, h in PanelController.shared.resize(to: h) }
+        .onChange(of: minimal) { _, m in model.minimal = m }
         .focusEffectDisabled()
         .legible()
         .onAppear { searchFocused = true }
@@ -341,10 +360,9 @@ struct HistoryView: View {
                     }
                     .padding(8)
                 }
+                .id(model.scrollResetID)   // fresh scroll view (offset at the top) on every open
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
-                .onChange(of: model.scrollResetID) { _, _ in scrollToFirst(proxy) }
-                .onAppear { scrollToFirst(proxy) }
             }
         }
 
@@ -373,10 +391,9 @@ struct HistoryView: View {
                     }
                     .padding(8)
                 }
+                .id(model.scrollResetID)   // fresh scroll view (offset at the top) on every open
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
-                .onChange(of: model.scrollResetID) { _, _ in scrollToFirst(proxy) }
-                .onAppear { scrollToFirst(proxy) }
             }
         }
         HStack {
@@ -386,11 +403,6 @@ struct HistoryView: View {
         }
         .padding(.horizontal, 8).padding(.bottom, 6)
         .frame(height: PanelModel.minimalFooterHeight)
-    }
-
-    private func scrollToFirst(_ proxy: ScrollViewProxy) {
-        guard let first = model.visible.first?.id else { return }
-        DispatchQueue.main.async { proxy.scrollTo(first, anchor: .top) }
     }
 
     private func historyRows(_ list: [ClipItem]) -> some View {
