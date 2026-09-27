@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Observation
 
 struct ClipItem: Codable, Identifiable, Equatable {
@@ -15,6 +16,7 @@ struct ClipItem: Codable, Identifiable, Equatable {
     var image: String?          // file name in images dir
     var size: String?           // "1440×900"
     var shortcut: Shortcut?     // global paste shortcut (pinned items only)
+    var hash: String?           // image content digest, for de-duplication
 
     var meta: String {
         let ago = Self.ago(date)
@@ -47,6 +49,11 @@ final class Store {
 
     private(set) var items: [ClipItem] = []
     var paused = false
+    /// Pinned items whose global shortcut couldn't be registered (another app owns the combo).
+    private(set) var failedShortcuts: Set<UUID> = []
+    /// Recent deletions for ⌘Z: each entry holds the removed items with their former positions.
+    private var undoStack: [[(index: Int, item: ClipItem)]] = []
+    var canUndo: Bool { !undoStack.isEmpty }
 
     let dir: URL = {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -64,6 +71,16 @@ final class Store {
            let list = try? JSONDecoder().decode([ClipItem].self, from: data) {
             items = list.filter(\.pinned) + list.filter { !$0.pinned }
         }
+        removeOrphanedImages()
+    }
+
+    /// Image blobs of deletions that were never undone are kept until the next launch.
+    private func removeOrphanedImages() {
+        let used = Set(items.compactMap(\.image))
+        let imgs = dir.appendingPathComponent("images")
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: imgs.path)) ?? [] where !used.contains(name) {
+            try? FileManager.default.removeItem(at: imgs.appendingPathComponent(name))
+        }
     }
 
     /// Order invariant: pinned items first (in the order they were pinned or dragged),
@@ -76,8 +93,11 @@ final class Store {
         // Same content copied again → bump to top instead of duplicating (keep pin).
         // A pinned duplicate keeps its place.
         var item = item
-        if let i = items.firstIndex(where: { $0.kind == item.kind && $0.text == item.text }) {
-            if items[i].pinned { items[i].date = item.date; save(); return }
+        let same: (ClipItem) -> Bool = item.kind == .image
+            ? { $0.kind == .image && $0.hash != nil && $0.hash == item.hash }
+            : { $0.kind == item.kind && $0.text == item.text }
+        if let i = items.firstIndex(where: same) {
+            if items[i].pinned { items[i].date = item.date; if item.image != nil { dropImage(item) }; save(); return }
             if item.image == nil { item.image = items[i].image } else { dropImage(items[i]) }
             items.remove(at: i)
         }
@@ -93,7 +113,7 @@ final class Store {
         if !item.pinned { item.shortcut = nil }
         // Newly pinned goes under the existing pins; unpinned goes to the top of the rest.
         items.insert(item, at: pinnedCount)
-        save()
+        save(); syncPinned()
     }
 
     /// Drag-to-reorder: moves `id` into `target`'s slot. Items stay within their group (pinned / not).
@@ -104,26 +124,55 @@ final class Store {
               items[from].pinned == items[to].pinned else { return }
         items.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
         save()
+        if items[to].pinned { syncPinned() }
     }
 
-    func setShortcut(_ id: UUID, _ sc: Shortcut?) {
-        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+    /// Returns false if the combo is the open-history shortcut or couldn't be registered.
+    @discardableResult
+    func setShortcut(_ id: UUID, _ sc: Shortcut?) -> Bool {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return false }
+        if let sc, sc.key == HotKey.main.key, sc.mods == HotKey.main.mods { return false }
         if let sc { for j in items.indices where items[j].shortcut == sc { items[j].shortcut = nil } }
         items[i].shortcut = sc
-        save()
+        save(); syncPinned()
+        return !failedShortcuts.contains(id)
     }
+
+    func syncPinned() { failedShortcuts = HotKey.syncPinned(items) }
 
     func remove(_ id: UUID) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
-        dropImage(items.remove(at: i))
+        let item = items.remove(at: i)
+        pushUndo([(i, item)])
         save()
+        if item.pinned { syncPinned() }
     }
 
     /// Pinned items survive "Clear all".
     func clear() {
-        items.filter { !$0.pinned }.forEach(dropImage)
+        let removed = items.enumerated().filter { !$0.element.pinned }.map { (index: $0.offset, item: $0.element) }
+        guard !removed.isEmpty else { return }
         items.removeAll { !$0.pinned }
+        pushUndo(removed)
         save()
+    }
+
+    /// Restores the most recent removal (single item or Clear all) at its former positions.
+    func undo() {
+        guard let entry = undoStack.popLast() else { return }
+        for (index, item) in entry.sorted(by: { $0.index < $1.index }) where !items.contains(where: { $0.id == item.id }) {
+            items.insert(item, at: min(index, items.count))
+        }
+        items = items.filter(\.pinned) + items.filter { !$0.pinned }
+        trim()
+        save()
+        if entry.contains(where: { $0.item.pinned }) { syncPinned() }
+    }
+
+    private func pushUndo(_ entry: [(index: Int, item: ClipItem)]) {
+        undoStack.append(entry)
+        // Images of deletions that can no longer be undone are removed now.
+        if undoStack.count > 10 { undoStack.removeFirst().forEach { dropImage($0.item) } }
     }
 
     func trim() {
@@ -135,6 +184,7 @@ final class Store {
             if unpinned > limit { dropImage(item); return true }
             return false
         }
+        save()
     }
 
     private func dropImage(_ item: ClipItem) {
@@ -142,7 +192,6 @@ final class Store {
     }
 
     private func save() {
-        HotKey.syncPinned(items)
         guard !saveScheduled else { return }
         saveScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
@@ -217,6 +266,9 @@ final class Watcher {
         "org.nspasteboard.AutoGeneratedType", "com.agilebits.onepassword",
     ]
 
+    /// Larger text (e.g. a whole log file) isn't kept: it bloats history.json and slows search.
+    static let maxText = 1_000_000
+
     private func capture(_ pb: NSPasteboard) -> ClipItem? {
         let types = Set(pb.types?.map(\.rawValue) ?? [])
         if Settings.skipConcealed, !types.isDisjoint(with: Self.concealed) { return nil }
@@ -229,7 +281,7 @@ final class Watcher {
 
         if let str = pb.string(forType: .string) {
             let t = str.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !t.isEmpty else { return nil }
+            guard !t.isEmpty, str.utf8.count <= Self.maxText else { return nil }
             if t.range(of: #"^#[0-9A-Fa-f]{6}$"#, options: .regularExpression) != nil {
                 return ClipItem(kind: .color, text: t.uppercased(), source: source)
             }
@@ -251,8 +303,9 @@ final class Watcher {
             let url = Store.shared.imageURL(name)
             DispatchQueue.global(qos: .utility).async { try? data.write(to: url) }
             let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd 'at' HH.mm"
+            let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             return ClipItem(id: id, kind: .image, text: "Image \(f.string(from: Date()))",
-                            source: source, image: name, size: size)
+                            source: source, image: name, size: size, hash: hash)
         }
         return nil
     }

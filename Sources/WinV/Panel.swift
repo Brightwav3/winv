@@ -45,6 +45,7 @@ final class PanelController {
     }
 
     func close() {
+        model.recording = nil
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
         panel?.orderOut(nil)
     }
@@ -73,7 +74,12 @@ final class PanelModel {
     var filter = Filter.all
     var selected: UUID?
     var historyOn = Settings.historyOn
-    var recording: UUID?      // pinned item waiting for a shortcut key combo
+    var recording: UUID? {    // pinned item waiting for a shortcut key combo
+        didSet {   // global shortcuts must not swallow the combo being recorded
+            if oldValue == nil, recording != nil { HotKey.suspend() }
+            if oldValue != nil, recording == nil { HotKey.resume() }
+        }
+    }
     var dragging: UUID?       // row being dragged to reorder
     var cmdHeld = false       // shows the ⌘1–9 hints
     var expanded: Set<UUID> = []
@@ -176,8 +182,8 @@ final class PanelModel {
             case 53: recording = nil                                   // esc cancels
             case 51, 117: Store.shared.setShortcut(id, nil); recording = nil // ⌫ clears
             default:
-                guard let sc = Shortcut(e) else { NSSound.beep(); return true }
-                Store.shared.setShortcut(id, sc); recording = nil
+                guard let sc = Shortcut(e), Store.shared.setShortcut(id, sc) else { NSSound.beep(); return true }
+                recording = nil
             }
             return true
         }
@@ -198,9 +204,13 @@ final class PanelModel {
             let next = list.indices.contains(i + 1) ? list[i + 1].id : (i > 0 ? list[i - 1].id : nil)
             Store.shared.remove(list[i].id)
             selected = next
+        case 6 where cmd: // ⌘Z brings back the last removal
+            guard Store.shared.canUndo else { return false }
+            withAnimation(.easeOut(duration: 0.2)) { Store.shared.undo() }
+            if selected == nil || !list.contains(where: { $0.id == selected }) { selected = visible.first?.id }
         case 35 where cmd: // ⌘P
             if let i = idx { Store.shared.togglePin(list[i].id) }
-        case 18...26 where cmd: // ⌘1…⌘9
+        case 18...28 where cmd: // ⌘1…⌘9
             let map: [Int: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
             let all = Store.shared.items
             if let n = map[Int(e.keyCode)], all.indices.contains(n) { paste(all[n]) } else { return false }
@@ -303,7 +313,7 @@ struct HistoryView: View {
         HStack {
             Text("↩ Paste · ⇧↩ Paste as plain text")
             Spacer()
-            Text("⌘1–9 · ⌘P Pin")
+            Text("⌘1–9 · ⌘P Pin · ⌘Z Undo")
             SettingsGear()
         }
         .font(.system(size: 12)).foregroundStyle(Color.ink3)
@@ -480,7 +490,9 @@ private struct Row: View {
                     Text("Press keys…").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.accent)
                         .padding(.horizontal, 6)
                 } else if let sc = item.shortcut {
-                    Text(sc.label).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.ink)
+                    Text(sc.label).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(taken ? Color(nsColor: .systemRed) : Color.ink)
+                        .strikethrough(taken)
                         .padding(.horizontal, 6)
                 } else {
                     Image(systemName: "keyboard").font(.system(size: 12)).foregroundStyle(Color.ink3)
@@ -493,8 +505,11 @@ private struct Row: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: record)
         }
-        .help(recording ? "Press a combo with ⌃, ⌥ or ⌘ · ⌫ clears · esc cancels" : "Set shortcut")
+        .help(recording ? "Press a combo with ⌃, ⌥ or ⌘ · ⌫ clears · esc cancels"
+              : taken ? "Another app uses this combo — click to pick another" : "Set shortcut")
     }
+
+    private var taken: Bool { Store.shared.failedShortcuts.contains(item.id) }
 
     private var previewURL: URL? {
         switch item.kind {

@@ -111,14 +111,16 @@ private final class AmbientView: NSView {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     var frost = false
+    private var observer: NSObjectProtocol?
     var tunable = false {
         didSet {
-            guard tunable else { return }
-            NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) {
+            guard tunable, observer == nil else { return }
+            observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated { self?.applyLook() }
             }
         }
     }
+    deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
 
     /// Re-applies tint and blur from the Settings sliders.
     func applyLook() {

@@ -59,10 +59,11 @@ You only need to do this once. Updates installed from inside WinV open normally.
 - 📋 **Paste as plain text.** Per paste with ⇧↩, or always, via Settings.
 - 🔢 **Quick paste.** Hold ⌘ to see numbers (in both panels), then ⌘1–⌘9 pastes one of the first nine items.
 - 📌 **Pins.** Pinned items stay at the top in the order you pinned them. They survive *Clear all* and restarts.
-- 🎹 **Pin shortcuts.** Give any pinned item its own global shortcut that pastes it from any app, without opening the panel.
+- 🎹 **Pin shortcuts.** Give any pinned item its own global shortcut that pastes it from any app, without opening the panel. If another app already owns the combo, WinV marks it in red.
 - ↕️ **Drag to reorder.** Drag items to arrange them. Pinned and unpinned items are reordered separately.
 - 👆 **Swipe to delete.** Hover a clip and swipe left with two fingers on the trackpad. A short swipe reveals *Paste as plain text* and *Remove*; keep swiping and the trash grows until it turns red, then let go to delete.
 - 🗑️ **Remove or clear.** Remove single items, or clear everything except pins.
+- ↩️ **Undo.** Deleted something by accident? ⌘Z in the panel brings back the last removal, including *Clear all*.
 
 ### Minimalistic mode
 - 🫧 **Just your clips.** An empty Liquid Glass panel that shows copied items as they are: no search bar, filters or metadata.
@@ -80,7 +81,7 @@ You only need to do this once. Updates installed from inside WinV open normally.
 - ⏸️ **Pause or turn off history** at any time; choose how many items to keep (10–200). Pinned items are never removed.
 - 💾 **History survives quit and restart**, stored as one small JSON file on your Mac.
 - 🚀 **Open at login**, optionally.
-- 🔄 **Automatic updates.** WinV checks GitHub Releases, notifies you about new versions and installs them with one click (*Install & Relaunch*). You can turn this off.
+- 🔄 **Automatic updates.** WinV checks GitHub Releases, notifies you about new versions and installs them with one click (*Install & Relaunch*). Every update is checked against a signature before it installs. You can turn this off.
 - 🪶 **Lightweight.** Lives in the menu bar with no Dock icon and no dependencies. It checks the clipboard every 0.5 s with a single counter read.
 
 ## Install
@@ -101,6 +102,7 @@ You only need to do this once. Updates installed from inside WinV open normally.
 | <kbd>⌘</kbd><kbd>1</kbd>–<kbd>9</kbd> | Paste one of the first nine items (pins first) |
 | <kbd>⌘</kbd><kbd>P</kbd> | Pin / unpin |
 | <kbd>⌫</kbd> | Remove item |
+| <kbd>⌘</kbd><kbd>Z</kbd> | Undo the last removal |
 | <kbd>esc</kbd> | Close |
 | Two-finger swipe left | Delete the hovered item (trackpad) |
 
@@ -123,7 +125,7 @@ cd winv
 ./build.sh
 ```
 
-This produces `build/WinV.app` and `build/WinV.dmg`.
+This produces `build/WinV.app` and `build/WinV.dmg`. Maintainers holding the release key (`~/.winv-signing-key`, see `scripts/sign-release.swift`) also get `build/WinV.dmg.sig`, which must be uploaded with every release.
 
 > [!TIP]
 > Create a code-signing certificate named **Clipboard Local Signing** in Keychain Access. `build.sh` signs with it, so the Accessibility permission stays granted across rebuilds.
@@ -140,6 +142,8 @@ Sources/WinV/
 ├── Windows.swift   # Settings, onboarding, shortcut recorder
 ├── Glass.swift     # Liquid Glass window chrome
 └── Theme.swift     # colors, styles, appearance switcher
+scripts/
+└── sign-release.swift  # release signing key + DMG signature
 ```
 
 ## Privacy

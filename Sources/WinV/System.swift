@@ -9,6 +9,7 @@ enum HotKey {
     private static var refs: [UInt32: EventHotKeyRef] = [:]
     private static var actions: [UInt32: () -> Void] = [:]
     private static var installed = false
+    private static var suspended = false
     private static let sig = OSType(0x434C_4950) // 'CLIP'
 
     @discardableResult
@@ -50,26 +51,30 @@ enum HotKey {
     }
 
     /// While recording a new combo, global shortcuts must not swallow the keypress.
-    static func suspend() { for id in Array(refs.keys) { unregister(id) } }
-    static func resume() { registerMain(); syncPinned(Store.shared.items) }
+    static func suspend() { suspended = true; for id in Array(refs.keys) { unregister(id) } }
+    static func resume() { suspended = false; registerMain(); Store.shared.syncPinned() }
 
     static func unregister(_ id: UInt32) {
         if let r = refs.removeValue(forKey: id) { UnregisterEventHotKey(r) }
         actions[id] = nil
     }
 
-    /// Re-register shortcuts for pinned items after any change.
-    static func syncPinned(_ items: [ClipItem]) {
+    /// Re-register shortcuts for pinned items after any change. Returns the items whose combo is taken.
+    static func syncPinned(_ items: [ClipItem]) -> Set<UUID> {
+        guard !suspended else { return [] }   // recording a combo; `resume` re-syncs
         for id in refs.keys where id >= 100 { unregister(id) }
+        var failed: Set<UUID> = []
         for (n, item) in items.enumerated() where item.pinned {
             guard let sc = item.shortcut else { continue }
             let itemID = item.id
-            register(id: 100 + UInt32(n), key: sc.key, mods: sc.mods) {
+            let ok = register(id: 100 + UInt32(n), key: sc.key, mods: sc.mods) {
                 guard let it = Store.shared.items.first(where: { $0.id == itemID }) else { return }
                 Paster.rememberTarget()
                 Paster.paste(it)
             }
+            if !ok { failed.insert(itemID) }
         }
+        return failed
     }
 
     private static func install() {

@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppTheme.apply()
         Watcher.shared.start()
         HotKey.registerMain()
-        HotKey.syncPinned(Store.shared.items)
+        Store.shared.syncPinned()
         Updater.shared.start()
         if !UserDefaults.standard.bool(forKey: "onboarded") { Windows.onboarding() }
 

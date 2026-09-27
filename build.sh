@@ -24,8 +24,8 @@ cat > $APP/Contents/Info.plist <<PLIST
   <key>CFBundleExecutable</key><string>WinV</string>
   <key>CFBundleIconFile</key><string>Clipboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.1.2</string>
-  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>1.1.3</string>
+  <key>CFBundleVersion</key><string>6</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>CFBundleIconName</key><string>Clipboard</string>
@@ -40,3 +40,6 @@ echo "Built $APP"
 S=build/dmg && rm -rf $S && mkdir -p $S && cp -R $APP $S/ && ln -s /Applications $S/Applications
 hdiutil create -volname WinV -srcfolder $S -ov -format UDZO build/WinV.dmg >/dev/null && rm -rf $S
 echo "Built build/WinV.dmg"
+# Detached Ed25519 signature the updater checks — upload WinV.dmg.sig next to WinV.dmg.
+# Only the release key holder can sign; local builds skip this.
+if [[ -f ~/.winv-signing-key ]]; then swift scripts/sign-release.swift build/WinV.dmg; fi

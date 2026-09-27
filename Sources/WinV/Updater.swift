@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import UserNotifications
 
@@ -9,11 +10,15 @@ import UserNotifications
 final class Updater: NSObject {
     static let shared = Updater()
     static let repo = "Brightwav3/winv"
+    /// Base64 Ed25519 public key from scripts/sign-release.sh. When set, a release installs only
+    /// if its DMG carries a valid `WinV.dmg.sig`; when empty, verification is off.
+    static let publicKey = "PHKlxt0TM+2XHo0YBXCCiu2SQbOv5necXtgcRT7fGJQ="
 
     struct Release: Equatable {
         var version: String
         var notes: String
         var dmg: URL
+        var sig: URL?
         var page: URL
     }
 
@@ -44,7 +49,8 @@ final class Updater: NSObject {
     // MARK: Checking
 
     func check(userInitiated: Bool) async {
-        guard status != .checking else { return }
+        // Never interrupt a download or install — that would re-enable the Install button mid-way.
+        guard status != .checking, status != .downloading, status != .installing else { return }
         status = .checking
         do {
             var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(Self.repo)/releases/latest")!)
@@ -52,9 +58,11 @@ final class Updater: NSObject {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw Failure("No release published yet.") }
             let gh = try JSONDecoder().decode(GitHubRelease.self, from: data)
-            guard let dmg = gh.assets.first(where: { $0.name.hasSuffix(".dmg") })?.browser_download_url else {
+            guard let dmgAsset = gh.assets.first(where: { $0.name.hasSuffix(".dmg") }) else {
                 throw Failure("The latest release has no DMG.")
             }
+            let dmg = dmgAsset.browser_download_url
+            let sig = gh.assets.first { $0.name == dmgAsset.name + ".sig" }?.browser_download_url
             status = .idle
             let version = gh.tag_name.hasPrefix("v") ? String(gh.tag_name.dropFirst()) : gh.tag_name
             guard Self.isNewer(version, than: current) else {
@@ -62,7 +70,7 @@ final class Updater: NSObject {
                 if userInitiated { alert("You're up to date", "WinV \(current) is the latest version.") }
                 return
             }
-            let release = Release(version: version, notes: gh.body ?? "", dmg: dmg, page: gh.html_url)
+            let release = Release(version: version, notes: gh.body ?? "", dmg: dmg, sig: sig, page: gh.html_url)
             available = release
             if userInitiated {
                 UpdateWindow.show()
@@ -109,6 +117,7 @@ final class Updater: NSObject {
             let (tmp, _) = try await URLSession.shared.download(from: r.dmg)
             let dmg = work.appendingPathComponent("WinV.dmg")
             try fm.moveItem(at: tmp, to: dmg)
+            try await Self.verify(dmg, r.sig)
 
             status = .installing
             let mount = work.appendingPathComponent("mnt")
@@ -155,6 +164,19 @@ final class Updater: NSObject {
             if l != r { return l > r }
         }
         return false
+    }
+
+    /// Checks the DMG against the release's detached Ed25519 signature (skipped while no key is embedded).
+    private static func verify(_ dmg: URL, _ sig: URL?) async throws {
+        guard !publicKey.isEmpty else { return }
+        guard let sig else { throw Failure("The update isn't signed. Download it manually from GitHub.") }
+        let (sigData, _) = try await URLSession.shared.data(from: sig)
+        guard let keyData = Data(base64Encoded: publicKey),
+              let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData),
+              let signature = Data(base64Encoded: String(decoding: sigData, as: UTF8.self)
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)),
+              key.isValidSignature(signature, for: try Data(contentsOf: dmg, options: .mappedIfSafe))
+        else { throw Failure("The update's signature is invalid. It was not installed.") }
     }
 
     private static func run(_ tool: String, _ args: [String]) async throws {

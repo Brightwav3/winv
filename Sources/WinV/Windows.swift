@@ -104,7 +104,10 @@ struct SettingsView: View {
                 row("Open at login", nil) {
                     Toggle("", isOn: $login).toggleStyle(PillToggle())
                         .onChange(of: login) { _, on in
-                            try? on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                            do { try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister() } catch {
+                                NSSound.beep()
+                                login = SMAppService.mainApp.status == .enabled   // show the real state
+                            }
                         }
                 }
             }
@@ -138,9 +141,13 @@ struct SettingsView: View {
                     }
                 }
                 ForEach(Array(pinned.enumerated()), id: \.element.id) { i, item in
-                    row(item.text.replacingOccurrences(of: "\n", with: " "), nil, first: i == 0) {
+                    row(item.text.replacingOccurrences(of: "\n", with: " "),
+                        Store.shared.failedShortcuts.contains(item.id) ? "That combo is used by another app. Try another." : nil,
+                        first: i == 0) {
                         HStack(spacing: 6) {
-                            ShortcutRecorder(label: item.shortcut?.label) { Store.shared.setShortcut(item.id, $0) }
+                            ShortcutRecorder(label: item.shortcut?.label) {
+                                if !Store.shared.setShortcut(item.id, $0) { NSSound.beep() }
+                            }
                             if item.shortcut != nil {
                                 Image(systemName: "xmark.circle.fill").foregroundStyle(Color.ink3)
                                     .onTapGesture { Store.shared.setShortcut(item.id, nil) }
@@ -299,6 +306,7 @@ struct OnboardingView: View {
 @MainActor
 enum Windows {
     private static var open: [String: NSWindow] = [:]
+    private static var closeObservers: [String: NSObjectProtocol] = [:]
 
     static func show(_ key: String, title: String, _ view: some View) {
         NSApp.activate(ignoringOtherApps: true)
@@ -321,8 +329,12 @@ enum Windows {
         w.center()
         w.makeKeyAndOrderFront(nil)
         open[key] = w
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
-            MainActor.assumeIsolated { open[key] = nil }
+        closeObservers[key] = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w,
+                                                                     queue: .main) { _ in
+            MainActor.assumeIsolated {
+                open[key] = nil
+                if let t = closeObservers.removeValue(forKey: key) { NotificationCenter.default.removeObserver(t) }
+            }
         }
     }
 
