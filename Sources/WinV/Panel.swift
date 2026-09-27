@@ -24,8 +24,7 @@ final class PanelController {
         let p = panel ?? makePanel()
         panel = p
         model.reset()
-        // Place for the tallest the panel can get, so it never has to flip sides while growing.
-        let size = NSSize(width: 360, height: PanelModel.maxHeight)
+        let size = NSSize(width: 360, height: model.height)
         // Sit above the caret's line (bottom edge on the line); if that doesn't fit, hang below it.
         let line = Access.caretRect()
         var origin = NSPoint(x: line.minX, y: line.maxY + 4)
@@ -37,7 +36,6 @@ final class PanelController {
             origin.y = min(max(origin.y, v.minY + 8), v.maxY - size.height - 8)
         }
         p.setFrame(NSRect(origin: origin, size: size), display: false)
-        resize(to: model.height)
         p.makeKeyAndOrderFront(nil)
         model.cmdHeld = NSEvent.modifierFlags.contains(.command)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .scrollWheel]) { [weak self] e in
@@ -109,20 +107,20 @@ final class PanelModel {
     static let tile: CGFloat = 64, tileGap: CGFloat = 6
     /// The panel fits its clips (at least one) up to this height, then scrolls.
     static let maxHeight: CGFloat = 520
-    var headerHeight: CGFloat = 0
-    var listHeight: CGFloat = 0
-    var footerHeight: CGFloat = 0
-    var height: CGFloat {
-        // Keep the initial panel large enough to lay out and measure its content.
-        if !historyOn { return listHeight > 0 ? min(Self.maxHeight, listHeight.rounded(.up)) : Self.maxHeight }
-        let minimal = Settings.minimal
-        guard listHeight > 0, footerHeight > 0, minimal || headerHeight > 0 else { return Self.maxHeight }
-        // Eight rows always fill the panel. Below that, use their measured height
-        // so the window loses exactly the space freed by each removed clip.
-        if visible.count >= 8 { return Self.maxHeight }
-        let oneRow = minimal ? MinimalRow.height + 20 : CGFloat(52)
-        let minimumList = oneRow + 16 // row plus the list's vertical padding
-        return min(Self.maxHeight, (headerHeight + max(listHeight, minimumList) + footerHeight).rounded(.up))
+    static let spacing: CGFloat = 4
+    static let listPadding: CGFloat = 16
+    static let normalHeaderHeight: CGFloat = 76
+    static let normalFooterHeight: CGFloat = 37
+    static let minimalFooterHeight: CGFloat = 27
+    var height: CGFloat { Self.height(for: visible.count, minimal: Settings.minimal, historyOn: historyOn) }
+
+    static func height(for clipCount: Int, minimal: Bool, historyOn: Bool) -> CGFloat {
+        if !historyOn { return 200 }
+        let count = max(1, clipCount)
+        let rowHeight = minimal ? MinimalRow.height + 20 : Row.height
+        let chrome = minimal ? Self.minimalFooterHeight : Self.normalHeaderHeight + Self.normalFooterHeight
+        let list = Self.listPadding + CGFloat(count) * rowHeight + CGFloat(count - 1) * Self.spacing
+        return min(Self.maxHeight, chrome + list)
     }
     static let deleteExtra: CGFloat = 90   // swipe this far past the open tray → trash turns red
 
@@ -148,7 +146,6 @@ final class PanelModel {
         query = ""; filter = .all; recording = nil; dragging = nil; expanded = []
         swipeID = nil; swipeDX = 0; hovered = nil
         historyOn = Settings.historyOn
-        headerHeight = 0; listHeight = 0; footerHeight = 0
         selected = visible.first?.id
     }
 
@@ -280,12 +277,6 @@ struct HistoryView: View {
         }
         .frame(width: 360, height: model.height, alignment: .top)
         .onChange(of: model.height) { _, h in PanelController.shared.resize(to: h) }
-        .onChange(of: minimal) { _, _ in
-            model.headerHeight = 0; model.listHeight = 0; model.footerHeight = 0
-        }
-        .onChange(of: model.historyOn) { _, _ in
-            model.headerHeight = 0; model.listHeight = 0; model.footerHeight = 0
-        }
         .focusEffectDisabled()
         .legible()
         .onAppear { searchFocused = true }
@@ -325,7 +316,7 @@ struct HistoryView: View {
             }
         }
         .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
-        .measure { model.headerHeight = $0 }
+        .frame(height: PanelModel.normalHeaderHeight)
 
         let list = model.visible
         if list.isEmpty {
@@ -339,17 +330,14 @@ struct HistoryView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            .frame(height: 68) // same list space as one compact clip
-            .measure { model.listHeight = $0 }
+            .frame(height: Row.height + PanelModel.listPadding)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    Group {
-                        if list.count < 8 { VStack(spacing: 4) { historyRows(list) } }
-                        else { LazyVStack(spacing: 4) { historyRows(list) } }
+                    LazyVStack(spacing: PanelModel.spacing) {
+                        historyRows(list)
                     }
                     .padding(8)
-                    .measure { model.listHeight = $0 }
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
@@ -364,7 +352,7 @@ struct HistoryView: View {
         }
         .font(.system(size: 12)).foregroundStyle(Color.ink3)
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .measure { model.footerHeight = $0 }
+        .frame(height: PanelModel.normalFooterHeight)
     }
 
     /// Minimalistic mode: bare glass, items shown as they are, a small pin on the right.
@@ -373,16 +361,13 @@ struct HistoryView: View {
         if list.isEmpty {
             Image(systemName: "doc.on.clipboard").font(.system(size: 26)).foregroundStyle(Color.ink3)
                 .frame(maxWidth: .infinity).frame(height: MinimalRow.height + 36)   // one clip's worth
-                .measure { model.listHeight = $0 }
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    Group {
-                        if list.count < 8 { VStack(spacing: 4) { minimalRows(list) } }
-                        else { LazyVStack(spacing: 4) { minimalRows(list) } }
+                    LazyVStack(spacing: PanelModel.spacing) {
+                        minimalRows(list)
                     }
                     .padding(8)
-                    .measure { model.listHeight = $0 }
                 }
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) { _, id in proxy.scrollTo(id) }
@@ -394,8 +379,7 @@ struct HistoryView: View {
             SettingsGear()
         }
         .padding(.horizontal, 8).padding(.bottom, 6)
-        .measure { model.footerHeight = $0 }
-        .onAppear { model.headerHeight = 0 }   // minimalistic mode has no top bar
+        .frame(height: PanelModel.minimalFooterHeight)
     }
 
     private func historyRows(_ list: [ClipItem]) -> some View {
@@ -445,7 +429,7 @@ struct HistoryView: View {
             }.buttonStyle(PillButton())
         }
         .padding(.horizontal, 28).padding(.vertical, 32)
-        .measure { model.headerHeight = 0; model.footerHeight = 0; model.listHeight = $0 }
+        .frame(height: 200)
     }
 }
 
@@ -498,11 +482,6 @@ private struct SwipeToDelete: ViewModifier {
 }
 
 extension View {
-    /// Reports this view's laid-out height (drives the panel's size).
-    fileprivate func measure(_ report: @escaping (CGFloat) -> Void) -> some View {
-        onGeometryChange(for: CGFloat.self) { $0.size.height } action: { report($0) }
-    }
-
     fileprivate func swipeToDelete(_ item: ClipItem, model: PanelModel) -> some View {
         modifier(SwipeToDelete(item: item, model: model))
     }
@@ -522,6 +501,7 @@ private struct ReorderDrop: DropDelegate {
 }
 
 private struct Row: View {
+    static let height: CGFloat = 70
     let item: ClipItem
     let selected: Bool
     let recording: Bool
@@ -554,6 +534,7 @@ private struct Row: View {
             }
         }
         .padding(10)
+        .frame(height: Self.height)
         .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Color.selBg.opacity(0.8) : hover ? Color.ink.opacity(0.06) : .clear))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.selBd.opacity(0.55) : .clear))
         .contentShape(Rectangle())
